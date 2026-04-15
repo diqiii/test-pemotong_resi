@@ -9,49 +9,32 @@ import zipfile
 import io
 import base64
 
-st.set_page_config(page_title="Mesin Pemotong Resi", page_icon="✂️", layout="wide")
-
-# ==========================================
-# PENGATURAN KENDALI (SIDEBAR)
-# ==========================================
-with st.sidebar:
-    st.header("⚙️ Kendali Mesin")
-    st.markdown("---")
-    st.markdown("**✂️ PISAU CUKUR (Potong Layar HP)**")
-    trim_atas_ui = st.slider("Potong Atas (%)", 0, 30, 10, help="Membuang menu atas (Baterai, Sinyal, dll)")
-    trim_bawah_ui = st.slider("Potong Bawah (%)", 0, 30, 10, help="Membuang menu bawah (Tombol dll)")
-    
-    trim_atas_pct = trim_atas_ui / 100.0
-    trim_bawah_pct = 1.0 - (trim_bawah_ui / 100.0)
-    
-    st.markdown("---")
-    st.markdown("**📏 SENSOR GARIS (Khusus TikTok)**")
-    # Trik Baru: Mengabaikan garis tipis di dalam resi
-    tebal_garis_ui = st.slider("Tebal Garis Minimal (px)", 5, 60, 25, help="Naikkan angka ini jika resi kepotong di tengah (kena garis kecil). Turunkan jika 2 resi malah menyambung.")
+# --- KONFIGURASI HALAMAN ---
+st.set_page_config(page_title="Mesin Pemotong Resi", page_icon="✂️", layout="centered")
 
 st.title("✂️ Mesin Pemotong Resi Otomatis")
-st.markdown("**Platform:** TikTok Shop & Shopee | **Fitur:** Original Core Logic + Auto-Filter")
+st.markdown("**Platform:** TikTok Shop & Shopee | **Fitur:** Auto-Crop, OCR, Anti-Duplikat, Filter Batal")
 
-# --- FUNGSI MESIN TIKTOK (V14 - SENSOR KETEBALAN DINAMIS) ---
+# --- FUNGSI MESIN TIKTOK (V8 - STABILITAS MATANG) ---
 def proses_tiktok(img_asli, global_counter, database_nomor, temp_dir):
     h_asli, w = img_asli.shape[:2]
     
-    y_trim_atas = int(h_asli * trim_atas_pct)
-    y_trim_bawah = int(h_asli * trim_bawah_pct)
-    if y_trim_bawah <= y_trim_atas: 
-        y_trim_bawah = h_asli
-        y_trim_atas = 0
-        
+    # Pisau Cukur (Sesuai HP)
+    y_trim_atas = int(h_asli * 0.17)
+    y_trim_bawah = int(h_asli * 0.85)
+    
     img = img_asli[y_trim_atas:y_trim_bawah, 0:w]
     h = img.shape[0] 
     
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    crop_gray = gray[:, int(w*0.05) : int(w*0.95)]
     
+    # EFEK BLUR DIHAPUS - Kembali murni ke logika aslimu!
+    crop_gray = gray[:, int(w*0.05) : int(w*0.95)]
     row_std = np.std(crop_gray, axis=1)
     row_mean = np.mean(crop_gray, axis=1)
     
-    is_garis_pemisah = (row_std < 8) & (row_mean > 225) & (row_mean < 250)
+    # Kembali ke rumus skriptiktokmatang.txt (Toleransi std sedikit dinaikkan untuk laptop)
+    is_garis_pemisah = (row_std < 12) & (row_mean > 220) & (row_mean < 252)
     
     garis_ditemukan = []
     in_garis = False
@@ -64,15 +47,16 @@ def proses_tiktok(img_asli, global_counter, database_nomor, temp_dir):
                 start_y = y
         else:
             if in_garis:
-                # Menggunakan variabel dari Slider, bukan angka mati 10
-                if (y - start_y) >= tebal_garis_ui: 
+                # Ketebalan 5 pixel (Biar resolusi kecil di laptop tetap ke-detect)
+                if (y - start_y) >= 5: 
                     garis_ditemukan.append((start_y, y))
                 in_garis = False
 
     if in_garis:
-        if (h - start_y) >= tebal_garis_ui: 
+        if (h - start_y) >= 5: 
             garis_ditemukan.append((start_y, h))
 
+    # Smart Slicer: Garis potong dari paling atas (0) sampai paling bawah (h)
     batas_y = [0]
     for g_start, g_end in garis_ditemukan:
         batas_y.append((g_start + g_end) // 2)
@@ -116,7 +100,7 @@ def proses_tiktok(img_asli, global_counter, database_nomor, temp_dir):
 
     return global_counter
 
-# --- FUNGSI MESIN SHOPEE (UTUH & SEMPURNA) ---
+# --- FUNGSI MESIN SHOPEE (Dikembalikan Utuh ke V5 yang Stabil) ---
 def proses_shopee(img, global_counter, database_nomor, temp_dir):
     h, w = img.shape[:2]
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -152,15 +136,21 @@ def proses_shopee(img, global_counter, database_nomor, temp_dir):
         if y_end_card - y_start_card < 200: continue
         
         card_gray = gray[y_start_card:y_end_card, 0:w]
+        
         card_ocr = cv2.resize(card_gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
         thresh = cv2.adaptiveThreshold(card_ocr, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 2)
         
         teks_full = pytesseract.image_to_string(thresh)
+        teks_upper = teks_full.upper()
+        
+        if "BATAL" in teks_upper or "CANCELED" in teks_upper or "CANCELLED" in teks_upper:
+            return global_counter 
             
         match = re.search(r'([0-9]{6}[A-Z0-9]{8,10})', teks_full)
         
         if match:
             nomor_pesanan = match.group(1)
+            
             if nomor_pesanan in database_nomor:
                 return global_counter 
             
@@ -184,6 +174,7 @@ def proses_shopee(img, global_counter, database_nomor, temp_dir):
                     break
             
             final_crop = img[y_start_card : y_start_card + cut_y, 0:w]
+            
             database_nomor.add(nomor_pesanan)
             nama_file = f"Shopee_{global_counter}_{nomor_pesanan}.jpg"
             cv2.imwrite(os.path.join(temp_dir, nama_file), final_crop)
@@ -200,13 +191,13 @@ with st.form("form_upload_resi", clear_on_submit=False):
     tombol_proses = st.form_submit_button("Proses Resi 🚀", use_container_width=True)
 
 if uploaded_files and not tombol_proses:
-    st.info(f"✅ Mantap! {len(uploaded_files)} file udah masuk keranjang.")
+    st.info(f"✅ Mantap! {len(uploaded_files)} file udah masuk keranjang. Silakan klik tombol Proses 🚀")
 
 if tombol_proses:
     if not uploaded_files:
         st.warning("Upload fotonya dulu bro di dalam kotak!")
     else:
-        with st.spinner('Membedah resi...'):
+        with st.spinner('Mesin sedang memotong, membaca nomor, dan menyaring resi batal...'):
             temp_dir = "temp_hasil"
             if os.path.exists(temp_dir): shutil.rmtree(temp_dir)
             os.makedirs(temp_dir)
@@ -226,7 +217,7 @@ if tombol_proses:
             hasil_files = os.listdir(temp_dir)
             
             if len(hasil_files) > 0:
-                st.success(f"🎉 Selesai! Menemukan {len(hasil_files)} potongan resi valid (Bersih dari Batal & Tanpa Nomor).")
+                st.success(f"🎉 Selesai! Berhasil memproses {len(hasil_files)} resi valid.")
                 
                 js_files_array = []
                 for filename in hasil_files:
@@ -272,8 +263,7 @@ if tombol_proses:
                     with col1:
                         st.image(img_bytes, use_container_width=True)
                     with col2:
-                        st.write(f"**✅ {filename}**")
-                            
+                        st.write(f"**{filename}**")
                         st.download_button(
                             label="📥 Download",
                             data=img_bytes,
@@ -283,4 +273,4 @@ if tombol_proses:
                         )
                     st.divider()
             else:
-                st.error("Tidak ada resi valid yang disimpan. Kemungkinan semua resi duplikat, dibatalkan, atau gagal terbaca nomornya.")
+                st.error("Tidak ada resi yang disimpan. Kemungkinan semua resi duplikat, dibatalkan, atau gagal terbaca nomornya.")
