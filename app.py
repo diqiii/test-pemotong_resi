@@ -20,8 +20,8 @@ def proses_tiktok(img_asli, global_counter, database_nomor, temp_dir):
     h_asli, w = img_asli.shape[:2]
     
     # Pisau Cukur (Sesuai HP)
-    y_trim_atas = int(h_asli * 0.15)
-    y_trim_bawah = int(h_asli * 0.85)
+    y_trim_atas = int(h_asli * 0.10)
+    y_trim_bawah = int(h_asli * 0.90)
     
     img = img_asli[y_trim_atas:y_trim_bawah, 0:w]
     h = img.shape[0] 
