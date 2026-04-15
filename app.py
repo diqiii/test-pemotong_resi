@@ -34,7 +34,7 @@ def proses_tiktok(img_asli, global_counter, database_nomor, temp_dir):
     row_mean = np.mean(crop_gray, axis=1)
     
     # Kembali ke rumus skriptiktokmatang.txt (Toleransi std sedikit dinaikkan untuk laptop)
-    is_garis_pemisah = (row_std < 12) & (row_mean > 220) & (row_mean < 252)
+    is_garis_pemisah = (row_std < 10) & (row_mean > 250) & (row_mean < 300)
     
     garis_ditemukan = []
     in_garis = False
