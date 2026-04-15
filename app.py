@@ -9,7 +9,6 @@ import zipfile
 import io
 import base64
 
-# --- KONFIGURASI HALAMAN ---
 st.set_page_config(page_title="Mesin Pemotong Resi", page_icon="✂️", layout="wide")
 
 # ==========================================
@@ -17,28 +16,23 @@ st.set_page_config(page_title="Mesin Pemotong Resi", page_icon="✂️", layout=
 # ==========================================
 with st.sidebar:
     st.header("⚙️ Pengaturan Pisau Cukur")
-    st.markdown("Geser ke **0%** jika gambar sudah bersih dari menu HP.")
-    trim_atas_ui = st.slider("✂️ Potong Atas (%)", 0, 30, 17, help="Membuang menu TikTok di atas (Jam, Sinyal, dll)")
-    trim_bawah_ui = st.slider("✂️ Potong Bawah (%)", 0, 30, 15, help="Membuang tombol TikTok di bawah")
+    st.markdown("Biarkan **0%** jika gambar sudah bersih dari menu HP.")
+    trim_atas_ui = st.slider("✂️ Potong Atas (%)", 0, 30, 0, help="Membuang menu atas")
+    trim_bawah_ui = st.slider("✂️ Potong Bawah (%)", 0, 30, 0, help="Membuang menu bawah")
     
     trim_atas_pct = trim_atas_ui / 100.0
     trim_bawah_pct = 1.0 - (trim_bawah_ui / 100.0)
-    st.markdown("---")
-    st.info("💡 **Tips:** Untuk gambar dari WhatsApp, biarkan di 17% dan 15%.")
 
 st.title("✂️ Mesin Pemotong Resi Otomatis")
-st.markdown("**Platform:** TikTok Shop & Shopee | **Fitur:** OCR Agresif, Anti-Duplikat")
+st.markdown("**Platform:** TikTok Shop & Shopee | **Fitur:** Original Core Logic")
 
-# --- FUNGSI MESIN TIKTOK (V11 - OCR AGRESIF) ---
+# --- FUNGSI MESIN TIKTOK (KEMBALI KE SKRIP MATANG) ---
 def proses_tiktok(img_asli, global_counter, database_nomor, temp_dir):
     h_asli, w = img_asli.shape[:2]
     
-    # Pisau Cukur Fleksibel (Dari Slider)
     y_trim_atas = int(h_asli * trim_atas_pct)
     y_trim_bawah = int(h_asli * trim_bawah_pct)
-    
-    # Hindari error kalau user ngawur geser slider
-    if y_trim_bawah <= y_trim_atas:
+    if y_trim_bawah <= y_trim_atas: 
         y_trim_bawah = h_asli
         y_trim_atas = 0
         
@@ -46,13 +40,13 @@ def proses_tiktok(img_asli, global_counter, database_nomor, temp_dir):
     h = img.shape[0] 
     
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    
     crop_gray = gray[:, int(w*0.05) : int(w*0.95)]
+    
     row_std = np.std(crop_gray, axis=1)
     row_mean = np.mean(crop_gray, axis=1)
     
-    # Sensor Garis (Kembali ke versi paling stabil)
-    is_garis_pemisah = (row_std < 15) & (row_mean > 200) & (row_mean < 255)
+    # 100% KEMBALI KE RUMUS ASLIMU! (Maksimal 250, bukan 255)
+    is_garis_pemisah = (row_std < 8) & (row_mean > 225) & (row_mean < 250)
     
     garis_ditemukan = []
     in_garis = False
@@ -65,14 +59,15 @@ def proses_tiktok(img_asli, global_counter, database_nomor, temp_dir):
                 start_y = y
         else:
             if in_garis:
-                if (y - start_y) >= 4: 
+                if (y - start_y) >= 10: # Syarat tebal 10 pixel sesuai skrip asli
                     garis_ditemukan.append((start_y, y))
                 in_garis = False
 
     if in_garis:
-        if (h - start_y) >= 4: 
+        if (h - start_y) >= 10: 
             garis_ditemukan.append((start_y, h))
 
+    # Smart Slicer biar resi pertama dan terakhir gak kebuang
     batas_y = [0]
     for g_start, g_end in garis_ditemukan:
         batas_y.append((g_start + g_end) // 2)
@@ -86,38 +81,22 @@ def proses_tiktok(img_asli, global_counter, database_nomor, temp_dir):
         if tinggi_resi > 150: 
             crop = img[y_atas:y_bawah, 0:w]
             
-            # BACA 100% AREA DENGAN RESOLUSI DITINGKATKAN
-            crop_ocr = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-            crop_ocr = cv2.resize(crop_ocr, None, fx=2.5, fy=2.5, interpolation=cv2.INTER_CUBIC)
+            # 100% OCR LOGIC DARI SKRIP MATANG (Tanpa mode agresif aneh-aneh)
+            header_h = int(tinggi_resi * 0.50)
+            crop_ocr = cv2.cvtColor(crop[0:header_h, :], cv2.COLOR_BGR2GRAY)
+            crop_ocr = cv2.resize(crop_ocr, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
             
-            # Dua metode kontras biar teksnya nendang
             thresh_adaptive = cv2.adaptiveThreshold(crop_ocr, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 2)
-            _, thresh_binary = cv2.threshold(crop_ocr, 150, 255, cv2.THRESH_BINARY)
-            
             teks_1 = pytesseract.image_to_string(thresh_adaptive)
-            teks_2 = pytesseract.image_to_string(thresh_binary)
+            
+            kontras = cv2.convertScaleAbs(crop_ocr, alpha=1.5, beta=0)
+            teks_2 = pytesseract.image_to_string(kontras)
             
             teks_gabungan = teks_1 + " " + teks_2
-            teks_upper = teks_gabungan.upper()
             
-            # 1. Cek Batal Dulu
-            if "BATAL" in teks_upper or "CANCELED" in teks_upper or "CANCELLED" in teks_upper:
-                nama_file = f"TikTok_{global_counter}_TERDETEKSI_BATAL.jpg"
-                cv2.imwrite(os.path.join(temp_dir, nama_file), crop)
-                global_counter += 1
-                continue 
-            
-            # ========================================================
-            # 2. MESIN GILING OCR (PEMBERSIH TEKS AGRESIF)
-            # Hapus semua karakter aneh & spasi hantu
-            teks_rapat = re.sub(r'[^A-Z0-9]', '', teks_upper)
-            
-            # Sulap huruf siluman balik jadi angka
-            teks_angka = teks_rapat.replace('S', '5').replace('O', '0').replace('I', '1').replace('L', '1').replace('B', '8').replace('Z', '2').replace('G', '6')
-            # ========================================================
-            
-            # Sekarang cari deretan angka panjang (15 sampai 22 digit)
-            match = re.search(r'(\d{15,22})', teks_angka)
+            match = re.search(r'#\s*([A-Za-z0-9]{10,})', teks_gabungan)
+            if not match:
+                match = re.search(r'(\d{15,})', teks_gabungan)
             
             if match:
                 nomor_pesanan = match.group(1)
@@ -173,13 +152,6 @@ def proses_shopee(img, global_counter, database_nomor, temp_dir):
         thresh = cv2.adaptiveThreshold(card_ocr, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 2)
         
         teks_full = pytesseract.image_to_string(thresh)
-        teks_upper = teks_full.upper()
-        
-        if "BATAL" in teks_upper or "CANCELED" in teks_upper or "CANCELLED" in teks_upper:
-            nama_file = f"Shopee_{global_counter}_TERDETEKSI_BATAL.jpg"
-            cv2.imwrite(os.path.join(temp_dir, nama_file), img[y_start_card:y_end_card, 0:w])
-            global_counter += 1
-            return global_counter 
             
         match = re.search(r'([0-9]{6}[A-Z0-9]{8,10})', teks_full)
         
@@ -224,13 +196,13 @@ with st.form("form_upload_resi", clear_on_submit=False):
     tombol_proses = st.form_submit_button("Proses Resi 🚀", use_container_width=True)
 
 if uploaded_files and not tombol_proses:
-    st.info(f"✅ Mantap! {len(uploaded_files)} file udah masuk keranjang. Silakan klik tombol Proses 🚀")
+    st.info(f"✅ Mantap! {len(uploaded_files)} file udah masuk keranjang.")
 
 if tombol_proses:
     if not uploaded_files:
         st.warning("Upload fotonya dulu bro di dalam kotak!")
     else:
-        with st.spinner('Menggiling nomor pesanan...'):
+        with st.spinner('Membedah resi...'):
             temp_dir = "temp_hasil"
             if os.path.exists(temp_dir): shutil.rmtree(temp_dir)
             os.makedirs(temp_dir)
@@ -250,7 +222,7 @@ if tombol_proses:
             hasil_files = os.listdir(temp_dir)
             
             if len(hasil_files) > 0:
-                st.success(f"🎉 Selesai! Menemukan {len(hasil_files)} resi.")
+                st.success(f"🎉 Selesai! Menemukan {len(hasil_files)} potongan resi.")
                 
                 js_files_array = []
                 for filename in hasil_files:
@@ -296,8 +268,8 @@ if tombol_proses:
                     with col1:
                         st.image(img_bytes, use_container_width=True)
                     with col2:
-                        if "TERDETEKSI_BATAL" in filename or "CEK_MANUAL" in filename:
-                            st.markdown(f"**🔴 {filename}**")
+                        if "CEK_MANUAL" in filename:
+                            st.markdown(f"**⚠️ {filename}**")
                         else:
                             st.write(f"**✅ {filename}**")
                             
@@ -310,4 +282,4 @@ if tombol_proses:
                         )
                     st.divider()
             else:
-                st.error("Gagal mendeteksi. Coba atur ulang slider Pisau Cukur di sebelah kiri.")
+                st.error("Gagal memotong resi. Garis pemisah tidak terdeteksi.")
