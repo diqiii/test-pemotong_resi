@@ -12,22 +12,27 @@ import base64
 st.set_page_config(page_title="Mesin Pemotong Resi", page_icon="✂️", layout="wide")
 
 # ==========================================
-# PENGATURAN PISAU CUKUR (SIDEBAR)
+# PENGATURAN KENDALI (SIDEBAR)
 # ==========================================
 with st.sidebar:
-    st.header("⚙️ Pengaturan Pisau Cukur")
-    st.markdown("Otomatis di **10%** (Sesuai hasil racikan paling pas). Geser ke **0%** jika gambar sudah bersih dari menu HP.")
-    # Default diset ke 10 sesuai permintaan
-    trim_atas_ui = st.slider("✂️ Potong Atas (%)", 0, 30, 10, help="Membuang menu atas")
-    trim_bawah_ui = st.slider("✂️ Potong Bawah (%)", 0, 30, 10, help="Membuang menu bawah")
+    st.header("⚙️ Kendali Mesin")
+    st.markdown("---")
+    st.markdown("**✂️ PISAU CUKUR (Potong Layar HP)**")
+    trim_atas_ui = st.slider("Potong Atas (%)", 0, 30, 10, help="Membuang menu atas (Baterai, Sinyal, dll)")
+    trim_bawah_ui = st.slider("Potong Bawah (%)", 0, 30, 10, help="Membuang menu bawah (Tombol dll)")
     
     trim_atas_pct = trim_atas_ui / 100.0
     trim_bawah_pct = 1.0 - (trim_bawah_ui / 100.0)
+    
+    st.markdown("---")
+    st.markdown("**📏 SENSOR GARIS (Khusus TikTok)**")
+    # Trik Baru: Mengabaikan garis tipis di dalam resi
+    tebal_garis_ui = st.slider("Tebal Garis Minimal (px)", 5, 60, 25, help="Naikkan angka ini jika resi kepotong di tengah (kena garis kecil). Turunkan jika 2 resi malah menyambung.")
 
 st.title("✂️ Mesin Pemotong Resi Otomatis")
 st.markdown("**Platform:** TikTok Shop & Shopee | **Fitur:** Original Core Logic + Auto-Filter")
 
-# --- FUNGSI MESIN TIKTOK (V13 - FILTER SENYAP & DEFAULT 10%) ---
+# --- FUNGSI MESIN TIKTOK (V14 - SENSOR KETEBALAN DINAMIS) ---
 def proses_tiktok(img_asli, global_counter, database_nomor, temp_dir):
     h_asli, w = img_asli.shape[:2]
     
@@ -46,7 +51,6 @@ def proses_tiktok(img_asli, global_counter, database_nomor, temp_dir):
     row_std = np.std(crop_gray, axis=1)
     row_mean = np.mean(crop_gray, axis=1)
     
-    # 100% KEMBALI KE RUMUS ASLIMU! (Maksimal 250)
     is_garis_pemisah = (row_std < 8) & (row_mean > 225) & (row_mean < 250)
     
     garis_ditemukan = []
@@ -60,15 +64,15 @@ def proses_tiktok(img_asli, global_counter, database_nomor, temp_dir):
                 start_y = y
         else:
             if in_garis:
-                if (y - start_y) >= 10: # Syarat tebal 10 pixel sesuai skrip asli
+                # Menggunakan variabel dari Slider, bukan angka mati 10
+                if (y - start_y) >= tebal_garis_ui: 
                     garis_ditemukan.append((start_y, y))
                 in_garis = False
 
     if in_garis:
-        if (h - start_y) >= 10: 
+        if (h - start_y) >= tebal_garis_ui: 
             garis_ditemukan.append((start_y, h))
 
-    # Smart Slicer biar resi pertama dan terakhir gak kebuang
     batas_y = [0]
     for g_start, g_end in garis_ditemukan:
         batas_y.append((g_start + g_end) // 2)
@@ -82,7 +86,6 @@ def proses_tiktok(img_asli, global_counter, database_nomor, temp_dir):
         if tinggi_resi > 150: 
             crop = img[y_atas:y_bawah, 0:w]
             
-            # OCR LOGIC DARI SKRIP MATANG
             header_h = int(tinggi_resi * 0.50)
             crop_ocr = cv2.cvtColor(crop[0:header_h, :], cv2.COLOR_BGR2GRAY)
             crop_ocr = cv2.resize(crop_ocr, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
@@ -96,8 +99,6 @@ def proses_tiktok(img_asli, global_counter, database_nomor, temp_dir):
             teks_gabungan = teks_1 + " " + teks_2
             teks_upper = teks_gabungan.upper()
             
-            # --- JURUS SATPAM (MODE SENYAP) ---
-            # 1. Kalau dibatalkan, langsung skip (buang)
             if "BATAL" in teks_upper or "CANCELED" in teks_upper or "CANCELLED" in teks_upper:
                 continue 
             
@@ -105,7 +106,6 @@ def proses_tiktok(img_asli, global_counter, database_nomor, temp_dir):
             if not match:
                 match = re.search(r'(\d{15,})', teks_gabungan)
             
-            # 2. Kalau ada nomor, simpan. Kalau GAK ADA nomor, dibuang (tidak ada CEK_MANUAL lagi)
             if match:
                 nomor_pesanan = match.group(1)
                 if nomor_pesanan not in database_nomor:
