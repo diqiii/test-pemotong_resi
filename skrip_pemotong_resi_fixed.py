@@ -176,45 +176,50 @@ def proses_tiktok(img_asli, global_counter, database_nomor, temp_dir):
         batas_y.append((g_start + g_end) // 2)
     batas_y.append(h)
 
-    for i in range(len(batas_y) - 1):
+    total_segmen = len(batas_y) - 1
+
+    for i in range(total_segmen):
         y_atas = batas_y[i]
         y_bawah = batas_y[i + 1]
         tinggi_resi = y_bawah - y_atas
 
-        # [FIX #3] Turunkan threshold dari 270 → 150px
-        # Resi yang terpotong di tepi atas/bawah foto bisa lebih pendek,
-        # tapi tetap mengandung nomor pesanan yang valid.
         if tinggi_resi > 150:
             crop = img[y_atas:y_bawah, 0:w]
 
-            # [FIX #3] Deteksi resi terpotong di tepi atas foto (i == 0)
-            # Jika ini adalah segmen PERTAMA (mulai dari y=0), berarti resi ini
-            # mungkin terpotong di atas → headernya tidak kelihatan.
-            # Solusi: scan SELURUH tinggi crop, bukan hanya 50% atas.
+            # Tandai posisi spesial: tepi atas dan tepi bawah foto
             is_resi_terpotong_atas = (i == 0 and y_atas == 0)
-            
-            if is_resi_terpotong_atas:
-                # Scan full crop karena header mungkin tidak ada
+            is_resi_terakhir = (i == total_segmen - 1)
+
+            # [FIX #4] MASKING IKON UI SCROLL (panah atas)
+            # TikTok menampilkan tombol scroll bulat di pojok kanan bawah resi terakhir.
+            # Ikon ini menimpa angka nomor pesanan -> OCR gagal membaca digit tertutup.
+            # Solusi: tutup area pojok kanan bawah dengan warna putih sebelum OCR.
+            crop_bersih = crop.copy()
+            if is_resi_terakhir:
+                mask_x = int(w * 0.75)
+                mask_y = int(tinggi_resi * 0.60)
+                crop_bersih[mask_y:, mask_x:] = 255
+
+            # Tentukan area OCR:
+            # - Resi terpotong atas atau terakhir: scan full
+            # - Resi normal: scan 50% atas saja (nomor ada di header)
+            if is_resi_terpotong_atas or is_resi_terakhir:
                 header_h = tinggi_resi
             else:
                 header_h = int(tinggi_resi * 0.50)
-            
-            crop_ocr = cv2.cvtColor(crop[0:header_h, :], cv2.COLOR_BGR2GRAY)
 
-            # [FIX #2] Fungsi OCR multi-strategi
+            crop_ocr = cv2.cvtColor(crop_bersih[0:header_h, :], cv2.COLOR_BGR2GRAY)
             teks_gabungan = ocr_multi_strategi(crop_ocr, agresif=ocr_agresif)
-            
-            # [FIX #3] Jika nomor tidak ditemukan di header, coba scan seluruh crop
-            # Ini menangkap kasus di mana nomor pesanan ada di posisi tidak terduga
+
             match = re.search(r'#\s*([A-Za-z0-9]{10,})', teks_gabungan)
             if not match:
                 match = re.search(r'(\d{15,})', teks_gabungan)
-            
-            if not match and not is_resi_terpotong_atas:
-                # Fallback: scan seluruh crop
-                crop_full_gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+
+            # Fallback: scan seluruh crop jika nomor belum ketemu
+            if not match:
+                crop_full_gray = cv2.cvtColor(crop_bersih, cv2.COLOR_BGR2GRAY)
                 teks_full = ocr_multi_strategi(crop_full_gray, agresif=ocr_agresif)
-                teks_gabungan = teks_full  # update untuk pengecekan BATAL di bawah
+                teks_gabungan = teks_full
                 match = re.search(r'#\s*([A-Za-z0-9]{10,})', teks_full)
                 if not match:
                     match = re.search(r'(\d{15,})', teks_full)
@@ -227,6 +232,7 @@ def proses_tiktok(img_asli, global_counter, database_nomor, temp_dir):
                 nomor_pesanan = match.group(1)
                 if nomor_pesanan not in database_nomor:
                     database_nomor.add(nomor_pesanan)
+                    # Simpan crop dari gambar ASLI (bukan yang sudah di-mask)
                     nama_file = f"TikTok_{global_counter}_{nomor_pesanan}.jpg"
                     cv2.imwrite(os.path.join(temp_dir, nama_file), crop)
                     global_counter += 1
