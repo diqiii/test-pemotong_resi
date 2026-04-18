@@ -181,22 +181,47 @@ def proses_tiktok(img_asli, global_counter, database_nomor, temp_dir):
         y_bawah = batas_y[i + 1]
         tinggi_resi = y_bawah - y_atas
 
-        if tinggi_resi > 270:
+        # [FIX #3] Turunkan threshold dari 270 → 150px
+        # Resi yang terpotong di tepi atas/bawah foto bisa lebih pendek,
+        # tapi tetap mengandung nomor pesanan yang valid.
+        if tinggi_resi > 150:
             crop = img[y_atas:y_bawah, 0:w]
 
-            header_h = int(tinggi_resi * 0.50)
+            # [FIX #3] Deteksi resi terpotong di tepi atas foto (i == 0)
+            # Jika ini adalah segmen PERTAMA (mulai dari y=0), berarti resi ini
+            # mungkin terpotong di atas → headernya tidak kelihatan.
+            # Solusi: scan SELURUH tinggi crop, bukan hanya 50% atas.
+            is_resi_terpotong_atas = (i == 0 and y_atas == 0)
+            
+            if is_resi_terpotong_atas:
+                # Scan full crop karena header mungkin tidak ada
+                header_h = tinggi_resi
+            else:
+                header_h = int(tinggi_resi * 0.50)
+            
             crop_ocr = cv2.cvtColor(crop[0:header_h, :], cv2.COLOR_BGR2GRAY)
 
-            # [FIX #2] Ganti dengan fungsi OCR multi-strategi
+            # [FIX #2] Fungsi OCR multi-strategi
             teks_gabungan = ocr_multi_strategi(crop_ocr, agresif=ocr_agresif)
-            teks_upper = teks_gabungan.upper()
-
-            if "BATAL" in teks_upper or "CANCELED" in teks_upper or "CANCELLED" in teks_upper:
-                continue
-
+            
+            # [FIX #3] Jika nomor tidak ditemukan di header, coba scan seluruh crop
+            # Ini menangkap kasus di mana nomor pesanan ada di posisi tidak terduga
             match = re.search(r'#\s*([A-Za-z0-9]{10,})', teks_gabungan)
             if not match:
                 match = re.search(r'(\d{15,})', teks_gabungan)
+            
+            if not match and not is_resi_terpotong_atas:
+                # Fallback: scan seluruh crop
+                crop_full_gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+                teks_full = ocr_multi_strategi(crop_full_gray, agresif=ocr_agresif)
+                teks_gabungan = teks_full  # update untuk pengecekan BATAL di bawah
+                match = re.search(r'#\s*([A-Za-z0-9]{10,})', teks_full)
+                if not match:
+                    match = re.search(r'(\d{15,})', teks_full)
+
+            teks_upper = teks_gabungan.upper()
+            if "BATAL" in teks_upper or "CANCELED" in teks_upper or "CANCELLED" in teks_upper:
+                continue
 
             if match:
                 nomor_pesanan = match.group(1)
