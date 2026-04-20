@@ -69,8 +69,6 @@ def baca_gambar_dengan_exif_fix(file_bytes_array):
 
 # ==========================================
 # FUNGSI 2: OCR MULTI-STRATEGI
-# Hanya untuk MEMBACA TEKS dari gambar (cari nomor / tanggal).
-# Tidak mempengaruhi gambar yang disimpan.
 # ==========================================
 def ocr_dari_gray(crop_gray, agresif=True):
     hasil_teks = []
@@ -100,7 +98,6 @@ def ocr_dari_gray(crop_gray, agresif=True):
 
 
 def ekstrak_nomor_tiktok(teks):
-    """Ekstrak nomor pesanan TikTok dari teks OCR."""
     match = re.search(r'#\s*([A-Za-z0-9]{10,})', teks)
     if not match:
         match = re.search(r'(\d{15,})', teks)
@@ -109,23 +106,11 @@ def ekstrak_nomor_tiktok(teks):
 
 # ==========================================
 # FUNGSI 3: MESIN TIKTOK
-#
-# ALUR BARU (dengan sorting):
-#   1. Proses semua foto → kumpulkan list: [(nomor, crop_image), ...]
-#   2. Sort list berdasarkan nomor pesanan DESCENDING (terbesar = terbaru)
-#   3. Simpan ke disk dengan counter urut 001, 002, 003, ...
-#
-# Nomor pesanan TikTok bersifat sequential (makin besar = makin baru),
-# sehingga sorting descending = pesanan terbaru di urutan pertama.
 # ==========================================
 def proses_tiktok(img_asli, database_nomor):
-    """
-    Memproses satu gambar TikTok.
-    Mengembalikan list of (nomor_pesanan, crop_image) — belum disimpan ke disk.
-    """
     hasil_sementara = []
 
-    h_asli, w = img_asli.shape[:2]
+    h_asli, w    = img_asli.shape[:2]
     y_trim_atas  = int(h_asli * trim_atas_pct)
     y_trim_bawah = int(h_asli * trim_bawah_pct)
     if y_trim_bawah <= y_trim_atas:
@@ -135,7 +120,6 @@ def proses_tiktok(img_asli, database_nomor):
     img = img_asli[y_trim_atas:y_trim_bawah, 0:w]
     h   = img.shape[0]
 
-    # Deteksi garis pemisah antar resi
     gray        = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     sensor_gray = gray[:, int(w * 0.05):int(w * 0.95)]
     row_std     = np.std(sensor_gray, axis=1)
@@ -173,17 +157,14 @@ def proses_tiktok(img_asli, database_nomor):
         if tinggi_resi < 270:
             continue
 
-        # Crop penuh = yang akan disimpan (tidak pernah dimodifikasi)
         crop_untuk_disimpan = img[y_atas:y_bawah, 0:w]
 
         is_resi_pertama  = (i == 0)
         is_resi_terakhir = (i == total_segmen - 1)
 
-        # Area OCR = copy terpisah, boleh dimodifikasi
         ocr_h        = tinggi_resi if (is_resi_pertama or is_resi_terakhir) else int(tinggi_resi * 0.40)
         area_ocr_bgr = crop_untuk_disimpan[0:ocr_h, 0:w].copy()
 
-        # Hapus ikon scroll (↑↑) TikTok di pojok kanan bawah
         if is_resi_terakhir:
             ix = int(w * 0.72)
             iy = int(ocr_h * 0.65)
@@ -198,7 +179,6 @@ def proses_tiktok(img_asli, database_nomor):
 
         nomor = ekstrak_nomor_tiktok(teks)
 
-        # Fallback: scan seluruh crop jika nomor belum ketemu di header
         if not nomor:
             full_bgr = crop_untuk_disimpan.copy()
             if is_resi_terakhir:
@@ -212,7 +192,6 @@ def proses_tiktok(img_asli, database_nomor):
                 continue
             nomor = ekstrak_nomor_tiktok(teks_full)
 
-        # Kumpulkan (belum simpan ke disk)
         if nomor and nomor not in database_nomor:
             database_nomor.add(nomor)
             hasil_sementara.append((nomor, crop_untuk_disimpan))
@@ -222,23 +201,8 @@ def proses_tiktok(img_asli, database_nomor):
 
 # ==========================================
 # FUNGSI 4: MESIN SHOPEE
-#
-# ALUR BARU (dengan sorting):
-#   1. Proses semua foto → kumpulkan list: [(datetime_obj, nomor, crop_image), ...]
-#   2. Sort list berdasarkan tanggal DESCENDING (terbaru di urutan pertama)
-#   3. Simpan ke disk dengan counter urut 001, 002, 003, ...
-#
-# Format tanggal Shopee di resi: "DD/MM/YYYY HH:MM" atau "YYYY-MM-DD HH:MM"
-# Jika tanggal gagal dibaca OCR, gunakan sentinel datetime(1970,1,1) agar
-# resi tersebut otomatis ditempatkan di akhir urutan.
 # ==========================================
 def ekstrak_tanggal_shopee(teks):
-    """
-    Cari tanggal di teks OCR resi Shopee.
-    Mengembalikan objek datetime untuk keperluan sorting,
-    atau datetime(1970,1,1) jika tidak ditemukan.
-    """
-    # Format: DD/MM/YYYY HH:MM  atau  DD/MM/YYYY, HH:MM
     m = re.search(r'(\d{2})/(\d{2})/(\d{4})[,\s]+(\d{2}):(\d{2})', teks)
     if m:
         try:
@@ -247,7 +211,6 @@ def ekstrak_tanggal_shopee(teks):
         except ValueError:
             pass
 
-    # Format: YYYY-MM-DD HH:MM
     m = re.search(r'(\d{4})-(\d{2})-(\d{2})[,\s]+(\d{2}):(\d{2})', teks)
     if m:
         try:
@@ -256,7 +219,6 @@ def ekstrak_tanggal_shopee(teks):
         except ValueError:
             pass
 
-    # Format: DD Mon YYYY (misal: 18 Apr 2026)
     m = re.search(r'(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{4})', teks, re.IGNORECASE)
     if m:
         bulan_map = {'jan':1,'feb':2,'mar':3,'apr':4,'may':5,'jun':6,
@@ -266,30 +228,25 @@ def ekstrak_tanggal_shopee(teks):
         except ValueError:
             pass
 
-    return datetime(1970, 1, 1)  # sentinel: tanggal tidak terbaca → taruh di akhir
+    return datetime(1970, 1, 1)
 
 
 def proses_shopee(img, database_nomor):
-    """
-    Memproses satu gambar Shopee.
-    Mengembalikan list of (datetime_obj, nomor_pesanan, crop_image) — belum disimpan ke disk.
-    """
     hasil_sementara = []
 
     h, w  = img.shape[:2]
     gray  = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-    crop_center = gray[:, int(w * 0.2):int(w * 0.8)]
-    row_std     = np.std(crop_center, axis=1)
-    row_mean    = np.mean(crop_center, axis=1)
-
+    crop_center  = gray[:, int(w * 0.2):int(w * 0.8)]
+    row_std      = np.std(crop_center, axis=1)
+    row_mean     = np.mean(crop_center, axis=1)
     putih_kertas = np.percentile(row_mean, 95)
     batas_abu    = putih_kertas - 2
     is_gap       = (row_std < 5) & (row_mean < batas_abu)
 
-    gaps     = []
-    in_gap   = False
-    start_y  = 0
+    gaps    = []
+    in_gap  = False
+    start_y = 0
     for y in range(h):
         if is_gap[y]:
             if not in_gap:
@@ -324,7 +281,6 @@ def proses_shopee(img, database_nomor):
             if nomor_pesanan in database_nomor:
                 continue
 
-            # Ekstrak tanggal untuk keperluan sorting
             tanggal = ekstrak_tanggal_shopee(teks_full)
 
             d = pytesseract.image_to_data(thresh, output_type=pytesseract.Output.DICT)
@@ -348,7 +304,6 @@ def proses_shopee(img, database_nomor):
 
             final_crop = img[y_start_card:y_start_card + cut_y, 0:w]
             database_nomor.add(nomor_pesanan)
-            # Kumpulkan dengan tanggal sebagai kunci sorting
             hasil_sementara.append((tanggal, nomor_pesanan, final_crop))
 
     return hasil_sementara
@@ -357,227 +312,19 @@ def proses_shopee(img, database_nomor):
 # ==========================================
 # ANTARMUKA STREAMLIT
 # ==========================================
-
 platform = st.radio("Pilih Platform Resi:", ("TikTok Shop", "Shopee"), horizontal=True)
 
-# -------------------------------------------------------
-# UPLOADER CUSTOM BERBASIS JAVASCRIPT
-# -------------------------------------------------------
-# MASALAH: st.file_uploader bawaan Streamlit menggunakan WebSocket untuk
-# transfer file. Di HP (terutama Android Chrome), saat user membuka file picker
-# > 3-4 detik, browser menganggap tab tidak aktif → WebSocket timeout →
-# file tidak terpilih/terupload tanpa pesan error apapun.
-#
-# SOLUSI: Ganti dengan input <file> HTML biasa + FileReader API.
-# Cara kerjanya:
-#   1. User pilih foto di file picker HTML native (tidak lewat WebSocket)
-#   2. JavaScript membaca file langsung di memori browser (FileReader API)
-#   3. File dikonversi ke base64 string di sisi browser
-#   4. base64 string dikirim ke Streamlit via st.query_params (URL parameter)
-#      atau via streamlit component bidirectional messaging
-#   5. Python menerima base64 → decode → proses seperti biasa
-#
-# Karena Streamlit Community Cloud tidak mendukung komponen custom dua arah
-# yang kompleks, kita pakai pendekatan PALING STABIL:
-# st.file_uploader tetap dipakai sebagai fallback untuk desktop,
-# tapi kita tambahkan tombol "Pilih Foto" custom yang me-trigger
-# input file dengan capture=environment (langsung kamera) dan
-# menggunakan pendekatan chunked upload via session_state.
-#
-# Untuk mengatasi timeout sepenuhnya, kita gunakan
-# st.components.v1.html dengan postMessage ke Streamlit.
-# -------------------------------------------------------
-
-# Inisialisasi session state untuk menyimpan file yang sudah dipilih
-if "uploaded_b64_list" not in st.session_state:
-    st.session_state.uploaded_b64_list = []
-if "file_names" not in st.session_state:
-    st.session_state.file_names = []
-
-# Komponen HTML custom uploader - membaca file di sisi browser,
-# tidak bergantung pada WebSocket Streamlit untuk proses pemilihan file
-uploader_html = """
-<style>
-  #drop-area {
-    border: 2.5px dashed #FF4B4B;
-    border-radius: 12px;
-    padding: 28px 16px;
-    text-align: center;
-    background: #fff5f5;
-    cursor: pointer;
-    transition: background 0.2s;
-    font-family: sans-serif;
-  }
-  #drop-area:hover, #drop-area.dragover { background: #ffe0e0; }
-  #drop-area p { margin: 6px 0; color: #555; font-size: 14px; }
-  #drop-area .icon { font-size: 36px; }
-  #file-input { display: none; }
-  #status-bar {
-    margin-top: 12px;
-    padding: 10px 14px;
-    border-radius: 8px;
-    background: #f0f0f0;
-    font-family: sans-serif;
-    font-size: 13px;
-    color: #333;
-    display: none;
-  }
-  #send-btn {
-    display: none;
-    width: 100%;
-    margin-top: 12px;
-    padding: 14px;
-    background: #FF4B4B;
-    color: white;
-    border: none;
-    border-radius: 8px;
-    font-size: 16px;
-    font-weight: bold;
-    cursor: pointer;
-  }
-  #send-btn:disabled { background: #ccc; cursor: not-allowed; }
-  #clear-btn {
-    display: none;
-    width: 100%;
-    margin-top: 6px;
-    padding: 10px;
-    background: #eee;
-    color: #555;
-    border: none;
-    border-radius: 8px;
-    font-size: 14px;
-    cursor: pointer;
-  }
-</style>
-
-<div id="drop-area" onclick="document.getElementById('file-input').click()">
-  <div class="icon">📷</div>
-  <p><strong>Ketuk di sini untuk pilih foto</strong></p>
-  <p>atau seret & lepas gambar ke sini</p>
-  <p style="font-size:12px; color:#aaa;">JPG, PNG, WEBP — bisa pilih banyak sekaligus</p>
-</div>
-
-<input type="file" id="file-input" accept="image/*" multiple>
-<div id="status-bar">⏳ Memuat foto...</div>
-<button id="send-btn">📤 Kirim <span id="jumlah-foto">0</span> Foto ke Mesin</button>
-<button id="clear-btn">🗑️ Hapus semua pilihan</button>
-
-<script>
-  // Menyimpan file yang sudah dikonversi ke base64
-  let fileQueue = [];
-
-  const dropArea  = document.getElementById('drop-area');
-  const fileInput = document.getElementById('file-input');
-  const statusBar = document.getElementById('status-bar');
-  const sendBtn   = document.getElementById('send-btn');
-  const clearBtn  = document.getElementById('clear-btn');
-
-  // Drag & drop support
-  ['dragenter','dragover'].forEach(e => dropArea.addEventListener(e, ev => {
-    ev.preventDefault(); dropArea.classList.add('dragover');
-  }));
-  ['dragleave','drop'].forEach(e => dropArea.addEventListener(e, ev => {
-    ev.preventDefault(); dropArea.classList.remove('dragover');
-  }));
-  dropArea.addEventListener('drop', ev => {
-    handleFiles(ev.dataTransfer.files);
-  });
-
-  fileInput.addEventListener('change', () => handleFiles(fileInput.files));
-
-  function handleFiles(files) {
-    if (!files || files.length === 0) return;
-
-    statusBar.style.display = 'block';
-    statusBar.textContent   = `⏳ Membaca ${files.length} foto... (0/${files.length})`;
-    sendBtn.style.display   = 'none';
-    clearBtn.style.display  = 'none';
-
-    let loaded = 0;
-    // Reset queue setiap kali ada pilihan baru
-    fileQueue = [];
-
-    Array.from(files).forEach(file => {
-      const reader = new FileReader();
-      reader.onload = function(e) {
-        // Simpan base64 tanpa header "data:image/...;base64,"
-        const b64 = e.target.result.split(',')[1];
-        fileQueue.push({ name: file.name, data: b64 });
-        loaded++;
-        statusBar.textContent = `⏳ Membaca foto... (${loaded}/${files.length})`;
-
-        if (loaded === files.length) {
-          statusBar.textContent         = `✅ ${files.length} foto siap dikirim!`;
-          statusBar.style.background    = '#e8f5e9';
-          sendBtn.style.display         = 'block';
-          clearBtn.style.display        = 'block';
-          document.getElementById('jumlah-foto').textContent = files.length;
-        }
-      };
-      reader.onerror = function() {
-        loaded++;
-        statusBar.textContent = `⚠️ Gagal membaca satu file, lanjut... (${loaded}/${files.length})`;
-      };
-      // Baca file sebagai Data URL (base64)
-      reader.readAsDataURL(file);
-    });
-  }
-
-  sendBtn.addEventListener('click', function() {
-    if (fileQueue.length === 0) return;
-
-    sendBtn.disabled      = true;
-    sendBtn.textContent   = '⏳ Mengirim...';
-    statusBar.textContent = '📡 Mengirim foto ke server...';
-
-    // Kirim data ke Streamlit via window.parent.postMessage
-    // Streamlit menangkap pesan ini melalui komponen HTML
-    window.parent.postMessage({
-      type:  'streamlit:setComponentValue',
-      value: fileQueue
-    }, '*');
-  });
-
-  clearBtn.addEventListener('click', function() {
-    fileQueue               = [];
-    fileInput.value         = '';
-    statusBar.style.display = 'none';
-    sendBtn.style.display   = 'none';
-    clearBtn.style.display  = 'none';
-    statusBar.style.background = '#f0f0f0';
-
-    window.parent.postMessage({
-      type:  'streamlit:setComponentValue',
-      value: []
-    }, '*');
-  });
-</script>
-"""
-
-# Terima data dari komponen HTML
-component_value = st.components.v1.html(uploader_html, height=260, scrolling=False)
-
-# Karena st.components.v1.html tidak mendukung return value dua arah secara langsung,
-# kita pakai st.file_uploader sebagai metode penerimaan yang andal,
-# tapi dengan UX yang dioptimalkan: label disembunyikan, hanya tombol yang tampil.
-# Ini tetap menggunakan WebSocket Streamlit untuk transfer aktual,
-# namun workaround utama adalah: user sudah memilih file via picker native
-# SEBELUM Streamlit terlibat — mengurangi window timeout secara signifikan.
-st.markdown("##### — atau gunakan uploader standar (lebih stabil di WiFi cepat) —")
-
 uploaded_files = st.file_uploader(
-    "Pilih foto resi",
+    "📷 Pilih foto resi (bisa banyak sekaligus)",
     type=["jpg", "jpeg", "png", "webp"],
     accept_multiple_files=True,
-    label_visibility="collapsed",
-    help="Jika foto sering gagal terpilih di HP, ketuk area foto di atas terlebih dahulu."
+    help="Di HP: pilih semua foto sekaligus dalam satu sesi pemilihan agar tidak timeout."
 )
 
-# Tombol proses
-tombol_proses = st.button("🚀 Proses Resi", use_container_width=True, type="primary")
+if uploaded_files:
+    st.info(f"✅ {len(uploaded_files)} foto siap — tekan tombol di bawah untuk mulai.")
 
-if uploaded_files and not tombol_proses:
-    st.info(f"✅ {len(uploaded_files)} foto siap diproses.")
+tombol_proses = st.button("🚀 Proses Resi", use_container_width=True, type="primary")
 
 if tombol_proses:
     if not uploaded_files:
@@ -585,7 +332,7 @@ if tombol_proses:
     else:
         progress_bar = st.progress(0, text="Memulai proses...")
 
-        with st.spinner('Membedah resi...'):
+        with st.spinner("Membedah resi..."):
             temp_dir = "temp_hasil"
             if os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir)
@@ -593,9 +340,6 @@ if tombol_proses:
 
             database_nomor = set()
 
-            # -------------------------------------------------------
-            # TAHAP 1: Kumpulkan semua hasil dari semua foto
-            # -------------------------------------------------------
             if platform == "TikTok Shop":
                 semua_hasil = []
                 for idx, file in enumerate(uploaded_files):
@@ -608,13 +352,9 @@ if tombol_proses:
                         continue
                     semua_hasil.extend(proses_tiktok(img, database_nomor))
 
-                # Sort nomor pesanan DESCENDING (terbesar = terbaru)
                 semua_hasil.sort(key=lambda x: x[0], reverse=True)
-
-                # Simpan dengan counter urut: TikTok_001_<nomor>.jpg
                 for counter, (nomor, crop) in enumerate(semua_hasil, start=1):
-                    nama_file = f"TikTok_{counter:03d}_{nomor}.jpg"
-                    cv2.imwrite(os.path.join(temp_dir, nama_file), crop)
+                    cv2.imwrite(os.path.join(temp_dir, f"TikTok_{counter:03d}_{nomor}.jpg"), crop)
 
             elif platform == "Shopee":
                 semua_hasil = []
@@ -628,73 +368,52 @@ if tombol_proses:
                         continue
                     semua_hasil.extend(proses_shopee(img, database_nomor))
 
-                # Sort tanggal DESCENDING (terbaru di atas)
                 semua_hasil.sort(key=lambda x: x[0], reverse=True)
-
-                # Simpan dengan counter urut: Shopee_001_<YYYYMMDD>_<nomor>.jpg
                 for counter, (tanggal, nomor, crop) in enumerate(semua_hasil, start=1):
-                    tgl_str   = tanggal.strftime("%Y%m%d") if tanggal.year > 1970 else "tglUnknown"
-                    nama_file = f"Shopee_{counter:03d}_{tgl_str}_{nomor}.jpg"
-                    cv2.imwrite(os.path.join(temp_dir, nama_file), crop)
+                    tgl_str = tanggal.strftime("%Y%m%d") if tanggal.year > 1970 else "tglUnknown"
+                    cv2.imwrite(os.path.join(temp_dir, f"Shopee_{counter:03d}_{tgl_str}_{nomor}.jpg"), crop)
 
         progress_bar.progress(100, text="Selesai! ✅")
         hasil_files = sorted(os.listdir(temp_dir))
 
-        if len(hasil_files) > 0:
+        if hasil_files:
             st.success(f"🎉 Selesai! Menemukan {len(hasil_files)} potongan resi valid.")
 
             js_files_array = []
             for filename in hasil_files:
-                file_path = os.path.join(temp_dir, filename)
-                with open(file_path, "rb") as f:
+                with open(os.path.join(temp_dir, filename), "rb") as f:
                     b64_str = base64.b64encode(f.read()).decode()
                     js_files_array.append(f'{{name: "{filename}", data: "data:image/jpeg;base64,{b64_str}"}}')
 
-            js_array_str = ",\n".join(js_files_array)
-
-            custom_html = f"""
-            <button id="dl-btn" style="width:100%; padding: 15px; background-color:#FF4B4B; color:white; border:none; border-radius:8px; cursor:pointer; font-weight:bold; font-size:16px; margin-bottom: 20px;">
+            st.components.v1.html(f"""
+            <button id="dl-btn" style="width:100%;padding:15px;background:#FF4B4B;color:white;
+              border:none;border-radius:8px;cursor:pointer;font-weight:bold;font-size:16px;margin-bottom:20px;">
                 🚀 DOWNLOAD SEMUA {len(hasil_files)} GAMBAR SEKALIGUS
             </button>
             <script>
             document.getElementById('dl-btn').addEventListener('click', async function() {{
-                const files = [
-                    {js_array_str}
-                ];
-                for(let i=0; i<files.length; i++) {{
-                    let link = document.createElement('a');
-                    link.href = files[i].data;
-                    link.download = files[i].name;
-                    document.body.appendChild(link);
-                    link.click();
-                    document.body.removeChild(link);
+                const files = [{",".join(js_files_array)}];
+                for(let i=0;i<files.length;i++) {{
+                    let a = document.createElement('a');
+                    a.href = files[i].data; a.download = files[i].name;
+                    document.body.appendChild(a); a.click(); document.body.removeChild(a);
                     await new Promise(r => setTimeout(r, 300));
                 }}
             }});
             </script>
-            """
-            st.components.v1.html(custom_html, height=80)
+            """, height=80)
 
             st.markdown("---")
             st.markdown("### Preview Hasil Potongan:")
-
             for filename in hasil_files:
-                file_path = os.path.join(temp_dir, filename)
-                with open(file_path, "rb") as file:
-                    img_bytes = file.read()
-
+                with open(os.path.join(temp_dir, filename), "rb") as f:
+                    img_bytes = f.read()
                 col1, col2 = st.columns([1, 3])
                 with col1:
                     st.image(img_bytes, use_container_width=True)
                 with col2:
                     st.write(f"**✅ {filename}**")
-                    st.download_button(
-                        label="📥 Download",
-                        data=img_bytes,
-                        file_name=filename,
-                        mime="image/jpeg",
-                        key=filename
-                    )
+                    st.download_button("📥 Download", img_bytes, filename, "image/jpeg", key=filename)
                 st.divider()
         else:
             st.error(
